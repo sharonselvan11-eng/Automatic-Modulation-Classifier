@@ -1,3 +1,8 @@
+<<<<<<< HEAD
 __pycache__/
 *.csv
+=======
+__pycache__/
+*.csv
+>>>>>>> 632bad8d286863bac4a6cbb46ee5170d413d1445
 *.pkl
