@@ -1,89 +1,85 @@
-import sys
-# Fix for Windows Emoji/Encoding errors
-sys.stdout.reconfigure(encoding='utf-8')
-
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
-# ==========================================
-# 1. GENERATE DATA (BPSK, QPSK, 16-QAM)
-# ==========================================
-print("📡 Generating 3-Class Dataset...")
-np.random.seed(42)
-n_samples = 1000
-noise_std = 0.25  # Slightly lower noise to make BPSK visible
+def generate_signals(num_samples_per_class, snr_db):
+    """
+    Generates BPSK, QPSK, and 16-QAM signals with AWGN based on target SNR in dB.
+    """
+    X = []
+    y = []
+    
+    # Convert SNR in dB to Noise Standard Deviation (sigma)
+    # SNR_linear = 10^(SNR_db / 10) = Signal_Power / Noise_Variance
+    # For normalized constellations, Signal Power is roughly 1.0 (average)
+    # Therefore, Noise Variance (sigma^2) = 1 / SNR_linear -> sigma = 1 / sqrt(10^(SNR_db / 10))
+    snr_linear = 10 ** (snr_db / 10.0)
+    noise_std = np.sqrt(1.0 / (2.0 * snr_linear)) # Divided by 2 for I and Q channels
 
-# Class 0: BPSK (2 points at -1, 1 on I-axis, 0 on Q-axis)
-bpsk_i = np.random.choice([-1, 1], n_samples) + np.random.normal(0, noise_std, n_samples)
-bpsk_q = np.random.normal(0, noise_std, n_samples) # Q is roughly 0
-y_bpsk = np.zeros(n_samples)
+    for _ in range(num_samples_per_class):
+        # 1. BPSK (2 points: -1, 1)
+        bits_bpsk = np.random.choice([-1, 1])
+        i_bpsk = bits_bpsk + np.random.normal(0, noise_std)
+        q_bpsk = np.random.normal(0, noise_std)
+        X.append([i_bpsk, q_bpsk])
+        y.append(0) # Class 0: BPSK
 
-# Class 1: QPSK (4 points)
-qpsk_i = np.random.choice([-1, 1], n_samples) + np.random.normal(0, noise_std, n_samples)
-qpsk_q = np.random.choice([-1, 1], n_samples) + np.random.normal(0, noise_std, n_samples)
-y_qpsk = np.ones(n_samples)
+        # 2. QPSK (4 points)
+        bits_qpsk = np.random.choice([-1, 1], size=2)
+        i_qpsk = (bits_qpsk[0] / np.sqrt(2)) + np.random.normal(0, noise_std)
+        q_qpsk = (bits_qpsk[1] / np.sqrt(2)) + np.random.normal(0, noise_std)
+        X.append([i_qpsk, q_qpsk])
+        y.append(1) # Class 1: QPSK
 
-# Class 2: 16-QAM (16 points)
-qam_vals = [-3, -1, 1, 3]
-qam_i = np.random.choice(qam_vals, n_samples) + np.random.normal(0, noise_std, n_samples)
-qam_q = np.random.choice(qam_vals, n_samples) + np.random.normal(0, noise_std, n_samples)
-y_qam = np.full(n_samples, 2)
+        # 3. 16-QAM (16 points on a grid)
+        bits_16qam = np.random.choice([-3, -1, 1, 3], size=2) / np.sqrt(10)
+        i_16qam = bits_16qam[0] + np.random.normal(0, noise_std)
+        q_16qam = bits_16qam[1] + np.random.normal(0, noise_std)
+        X.append([i_16qam, q_16qam])
+        y.append(2) # Class 2: 16-QAM
 
-# Combine
-X = np.vstack((np.column_stack((bpsk_i, bpsk_q)), 
-               np.column_stack((qpsk_i, qpsk_q)), 
-               np.column_stack((qam_i, qam_q))))
-y = np.concatenate((y_bpsk, y_qpsk, y_qam))
+    return np.array(X), np.array(y)
 
-# ==========================================
-# 2. TRAIN MODEL
-# ==========================================
-print("🧠 Training Neural Network...")
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+print("Starting SNR Sweep Simulation (-10 dB to +20 dB)...")
 
-# We use a slightly larger network now because the problem is harder
-clf = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=1)
-clf.fit(X_scaled, y)
+# Define range of SNR values to test (from harsh noise to clean signal)
+snr_range = range(-10, 21, 2)
+accuracies = []
 
-# Report Accuracy
-acc = accuracy_score(y, clf.predict(X_scaled))
-print(f"✅ Training Accuracy: {acc*100:.2f}%")
+for snr in snr_range:
+    # Generate training and testing data at this specific SNR level
+    X, y = generate_signals(num_samples_per_class=1000, snr_db=snr)
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Train MLP Classifier
+    mlp = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=300, random_state=42)
+    mlp.fit(X_train_scaled, y_train)
+    
+    # Predict and evaluate
+    y_pred = mlp.predict(X_test_scaled)
+    acc = accuracy_score(y_test, y_pred)
+    accuracies.append(acc * 100)
+    print(f"SNR: {snr:2d} dB -> Accuracy: {acc * 100:.2f}%")
 
-# ==========================================
-# 3. VISUALIZE DECISION BOUNDARY
-# ==========================================
-print("🎨 Drawing the Map (this takes a moment)...")
+# Plotting the Accuracy vs SNR Curve
+plt.figure(figsize=(10, 6))
+plt.plot(snr_range, accuracies, marker='o', linestyle='-', color='b', linewidth=2.5, markersize=6)
+plt.title('ModulAI: Classification Accuracy vs. Signal-to-Noise Ratio (SNR)', fontsize=14, fontweight='bold')
+plt.xlabel('SNR (dB) [Lower = More Noise, Higher = Cleaner Signal]', fontsize=12)
+plt.ylabel('Classification Accuracy (%)', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.ylim(20, 105)
 
-# Create a meshgrid covering the chart area
-x_min, x_max = X[:, 0].min() - 0.5, X[:, 0].max() + 0.5
-y_min, y_max = X[:, 1].min() - 0.5, X[:, 1].max() + 0.5
-h = 0.05
-xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
-
-# Predict every point on the grid
-grid_points = np.c_[xx.ravel(), yy.ravel()]
-Z = clf.predict(scaler.transform(grid_points))
-Z = Z.reshape(xx.shape)
-
-# Plot
-plt.figure(figsize=(12, 10))
-# The Contour Map
-plt.contourf(xx, yy, Z, alpha=0.3, cmap='viridis') # viridis handles 3 colors nicely
-
-# The Scatter Points
-plt.scatter(bpsk_i, bpsk_q, c='purple', label='BPSK (Class 0)', s=10, alpha=0.6)
-plt.scatter(qpsk_i, qpsk_q, c='teal',   label='QPSK (Class 1)', s=10, alpha=0.6)
-plt.scatter(qam_i, qam_q,   c='yellow', label='16-QAM (Class 2)', s=10, alpha=0.6)
-
-plt.title(f'3-Way Modulation Classification\nAccuracy: {acc*100:.1f}%')
-plt.xlabel('In-Phase (I)')
-plt.ylabel('Quadrature (Q)')
-plt.legend()
-plt.grid(False)
-
-print("Displaying plot...")
+# Save the plot
+output_filename = 'accuracy_vs_snr.png'
+plt.savefig(output_filename, dpi=300)
+print(f"\n Success! SNR sweep complete. Plot saved as '{output_filename}'.")
 plt.show()
